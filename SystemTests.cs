@@ -31,18 +31,18 @@ class SystemTests
             ui = new ReminderApp(file, true);
             ui.Start(true); Pump();
             Check(!ui.MainWindow.IsVisible, "后台启动时主窗口保持隐藏");
-            using (var signal = EventWaitHandle.OpenExisting("Local\\WorkReminder-Show-" + Environment.UserName)) signal.Set();
+            using (var signal = EventWaitHandle.OpenExisting("Local\\WorkReminder-Show-" + Environment.UserName+"-"+BridgePipeClient.Name(file))) signal.Set();
             ui.Tick(); Pump();
             Check(ui.MainWindow.IsVisible, "进程间唤醒信号可重新打开主窗口");
             ui.MainWindow.Close(); Pump();
             Check(!ui.MainWindow.IsVisible, "关闭主窗口后隐藏到托盘");
-            using (var signal = EventWaitHandle.OpenExisting("Local\\WorkReminder-Show-" + Environment.UserName)) signal.Set();
+            using (var signal = EventWaitHandle.OpenExisting("Local\\WorkReminder-Show-" + Environment.UserName+"-"+BridgePipeClient.Name(file))) signal.Set();
             ui.Tick(); Pump();
             Check(ui.MainWindow.IsVisible, "收起到托盘后仍能再次打开");
             ui.Control<Button>("ExitButton").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Check(!ui.MainWindow.IsVisible, "退出按钮关闭窗口并停止运行");
             bool removed = false;
-            try { using (var signal = EventWaitHandle.OpenExisting("Local\\WorkReminder-Show-" + Environment.UserName)) { } }
+            try { using (var signal = EventWaitHandle.OpenExisting("Local\\WorkReminder-Show-" + Environment.UserName+"-"+BridgePipeClient.Name(file))) { } }
             catch (WaitHandleCannotBeOpenedException) { removed = true; }
             Check(removed, "退出后释放系统唤醒信号");
             ui = null;

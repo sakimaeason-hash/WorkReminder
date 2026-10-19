@@ -86,6 +86,7 @@
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <StackPanel><TextBlock x:Name="ViewTitle" Text="今日待办" FontSize="25" FontWeight="SemiBold" TextWrapping="Wrap"/><TextBlock x:Name="SummaryLabel" Foreground="#78847F" Margin="0,9,0,0" TextWrapping="Wrap"/></StackPanel>
         <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+          <Button x:Name="CodexButton" Content="Codex 助手" AutomationProperties.Name="Codex 助手" Margin="0,0,8,0"/>
           <Button x:Name="ExportSettingsButton" Content="导出设置" AutomationProperties.Name="导出设置" Margin="0,0,8,0" ToolTip="设置 PBC 汇报周期"/>
           <Button x:Name="ExportButton" Content="导出 PBC" AutomationProperties.Name="导出 PBC" Margin="0,0,8,0" ToolTip="导出当前项目或全部项目 PBC 汇报"/>
           <Button x:Name="NewButton" Style="{StaticResource Primary}" ToolTip="新增工作提醒">

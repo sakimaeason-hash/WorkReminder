@@ -1,3 +1,7 @@
 *.exe
 *.pdb
+*.dll
+codex-schema/
 verification/
+data-location.txt
+codex-path.txt

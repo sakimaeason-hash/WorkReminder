@@ -222,7 +222,7 @@ namespace WorkReminder
             }
         }
 
-        static string BuildHtml(PbcReport report)
+        public static string BuildHtml(PbcReport report)
         {
             if (report.Sections != null) return BuildAllHtml(report);
             var b = new StringBuilder();
@@ -247,7 +247,7 @@ namespace WorkReminder
             return b.ToString();
         }
 
-        static string BuildMarkdown(PbcReport report)
+        public static string BuildMarkdown(PbcReport report)
         {
             if (report.Sections != null) return BuildAllMarkdown(report);
             var b = new StringBuilder();

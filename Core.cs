@@ -8,6 +8,48 @@ using System.Runtime.Serialization.Json;
 
 namespace WorkReminder
 {
+    public static class DataLocation
+    {
+        public static string DefaultFile
+        {
+            get { return ResolveDefault(AppDomain.CurrentDomain.BaseDirectory,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"WorkReminder","tasks.json")); }
+        }
+        public static string ResolveArguments(string[] args)
+        {
+            return ResolveArguments(args,AppDomain.CurrentDomain.BaseDirectory,Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"WorkReminder","tasks.json"));
+        }
+        public static string ResolveArguments(string[] args,string applicationDirectory,string legacyFile)
+        {
+            int index=Array.IndexOf(args,"--data-file");
+            if(index<0)return ResolveDefault(applicationDirectory,legacyFile);
+            if(index+1>=args.Length || string.IsNullOrWhiteSpace(args[index+1]) || args[index+1].StartsWith("--",StringComparison.Ordinal))throw new ArgumentException("--data-file 缺少路径");
+            string file=Path.GetFullPath(args[index+1]);
+            if(Directory.Exists(file) || string.IsNullOrEmpty(Path.GetFileName(file)))throw new InvalidDataException("--data-file 必须指定文件，不能使用目录。");
+            return file;
+        }
+        public static string ResolveDefault(string applicationDirectory,string legacyFile)
+        {
+            string locationFile=Path.Combine(applicationDirectory,"data-location.txt");
+            if(!File.Exists(locationFile))return Path.GetFullPath(legacyFile);
+            string value=File.ReadAllText(locationFile).Trim();
+            try
+            {
+                string root=Path.GetPathRoot(value);
+                bool absolute=Path.IsPathRooted(value) && !string.IsNullOrEmpty(root) &&
+                    ((root.Length==3 && root[1]==':' && (root[2]=='\\'||root[2]=='/')) || root.StartsWith("\\\\",StringComparison.Ordinal));
+                if(!absolute || value.IndexOfAny(new []{'\r','\n'})>=0)throw new InvalidDataException("必须使用绝对文件路径。");
+                string full=Path.GetFullPath(value);
+                if(string.IsNullOrEmpty(Path.GetFileName(full)) || Directory.Exists(full))throw new InvalidDataException("必须指定数据文件，不能使用目录。");
+                return full;
+            }
+            catch(Exception ex)
+            {
+                if(!(ex is ArgumentException) && !(ex is NotSupportedException) && !(ex is PathTooLongException) && !(ex is InvalidDataException))throw;
+                throw new InvalidDataException("data-location.txt 必须包含有效的绝对数据文件路径；为避免打开错误数据，已停止启动。",ex);
+            }
+        }
+    }
+
     public static class WorkflowConstants
     {
         public const int CurrentVersion = 2;
@@ -167,6 +209,7 @@ namespace WorkReminder
                 throw new InvalidDataException("未知的重复规则。");
             if (Priority != "normal" && Priority != "high") throw new InvalidDataException("未知的优先级。");
             DateTime date = DueAt;
+            if (!String.IsNullOrEmpty(TargetDate)) { DateTime target = TargetDateValue.Value; }
             if (date.Year < 2000 || date.Year > 9990) throw new InvalidDataException("任务日期超出有效范围。");
             if (Notes == null) Notes = "";
             if (IsCompleted && FollowUpStatus != WorkflowConstants.Pending && FollowUpStatus != WorkflowConstants.Next && FollowUpStatus != WorkflowConstants.Closed)
@@ -194,6 +237,8 @@ namespace WorkReminder
         [DataMember] public bool SoundEnabled { get; set; }
         [DataMember] public List<ReminderProject> Projects { get; set; }
         [DataMember] public ExportSettings ExportSettings { get; set; }
+        [DataMember] public long Revision { get; set; }
+        [DataMember] public List<BridgeReceipt> OperationReceipts { get; set; }
 
         public static ReminderProject UnassignedProject()
         {
@@ -205,6 +250,7 @@ namespace WorkReminder
             if (Tasks == null) Tasks = new List<ReminderTask>();
             if (Projects == null) Projects = new List<ReminderProject>();
             if (ExportSettings == null) ExportSettings = new ExportSettings();
+            if (OperationReceipts == null) OperationReceipts = new List<BridgeReceipt>();
             if (Projects.All(p => p == null || p.Id != WorkflowConstants.UnassignedProjectId))
                 Projects.Insert(0, UnassignedProject());
             foreach (var task in Tasks)
@@ -421,8 +467,10 @@ namespace WorkReminder
             state.Version = WorkflowConstants.CurrentVersion; state.EnsureDefaults(); state.Validate();
             Directory.CreateDirectory(Path.GetDirectoryName(FilePath));
             string temp = FilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            long previousRevision = state.Revision;
             try
             {
+                state.Revision = checked(previousRevision + 1);
                 using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 {
                     new DataContractJsonSerializer(typeof(AppState)).WriteObject(stream, state);
@@ -431,6 +479,7 @@ namespace WorkReminder
                 if (File.Exists(FilePath)) File.Replace(temp, FilePath, FilePath + ".bak");
                 else File.Move(temp, FilePath);
             }
+            catch { state.Revision = previousRevision; throw; }
             finally { if (File.Exists(temp)) File.Delete(temp); }
         }
     }

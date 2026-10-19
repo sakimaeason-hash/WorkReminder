@@ -11,7 +11,7 @@ try {
         [ordered]@{ Id = $id; Title = $title; Due = '2026-09-20T09:00:00'; Repeat = 'once'; Priority = 'normal'; Notes = '保留备注'; Snoozed = $null; IsCompleted = $done; ProjectId = 'project-unassigned'; WorkflowId = $workflow; PreviousTaskId = $previous; CompletedAt = $(if ($done) { '2026-09-21T09:00:00' } else { $null }); FollowUpStatus = $status; ClosedAt = $closed; Origin = 'manual'; TargetDate = ''; Outcome = ''; Evidence = '' }
     }
     $sample = [ordered]@{
-        Version = 2; SoundEnabled = $false
+        Version = 2; SoundEnabled = $false; Revision = 7; OperationReceipts=@()
         Projects = @([ordered]@{ Id = 'project-unassigned'; Name = '未归类'; IsSystem = $true; Owner = ''; Goal = ''; SuccessCriteria = ''; TargetDate = ''; RisksAndSupport = '' })
         Tasks = @(
             (Task $activeId '仍需处理' $activeId $null $false '' $null)
@@ -27,6 +27,7 @@ try {
     [System.IO.File]::WriteAllText($archivePath, (ConvertTo-Json -InputObject $archiveLegacy -Depth 20), $encoding)
     & (Join-Path $PSScriptRoot 'archive-completed.ps1') -DataDirectory $folder | Out-Null
     $remaining = Get-Content -LiteralPath $tasksPath -Raw | ConvertFrom-Json
+    if($remaining.Revision -ne 8){throw '归档必须更新数据版本，防止旧请求覆盖。'}
     $archive = Get-Content -LiteralPath $archivePath -Raw | ConvertFrom-Json
     if ($remaining.Tasks.Count -ne 2 -or @($remaining.Tasks.Id | Where-Object { $_ -eq $activeId -or $_ -eq $pendingId }).Count -ne 2) { throw '未闭环事项被错误归档。' }
     if ($archive.Version -ne 2 -or $archive.Tasks.Count -ne 3 -or @($archive.Tasks.Id | Where-Object { $_ -eq $rootId -or $_ -eq $lastId }).Count -ne 2) { throw '闭环工作链未整链归档。' }

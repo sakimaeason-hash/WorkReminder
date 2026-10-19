@@ -18,6 +18,27 @@ class Tests
     {
         try
         {
+            string locationFolder=Path.Combine(Path.GetTempPath(),"WorkReminder-location-"+Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(locationFolder);
+            try {
+                var locationType=typeof(StateStore).Assembly.GetType("WorkReminder.DataLocation");
+                Check(locationType!=null,"存在统一默认数据位置解析器");
+                var resolve=locationType.GetMethod("ResolveDefault");
+                string fallback=Path.Combine(locationFolder,"legacy","tasks.json");
+                Check((string)resolve.Invoke(null,new object[]{locationFolder,fallback})==fallback,"未配置路径时兼容原数据位置");
+                string shared=Path.Combine(locationFolder,"共享 data","tasks.json");
+                File.WriteAllText(Path.Combine(locationFolder,"data-location.txt"),shared+"\r\n");
+                Check((string)resolve.Invoke(null,new object[]{locationFolder,fallback})==shared,"绝对共享路径优先且支持空格中文");
+                foreach(string invalid in new []{"relative\\tasks.json","C:tasks.json","\\tasks.json","","https://example.com/tasks.json",locationFolder}) {
+                    File.WriteAllText(Path.Combine(locationFolder,"data-location.txt"),invalid);
+                    bool rejected=false;try{resolve.Invoke(null,new object[]{locationFolder,fallback});}catch(System.Reflection.TargetInvocationException e){rejected=e.InnerException is InvalidDataException;}
+                    Check(rejected,"拒绝非绝对配置路径："+invalid);
+                }
+                File.WriteAllText(Path.Combine(locationFolder,"data-location.txt"),"invalid-default");
+                var resolveArguments=locationType.GetMethod("ResolveArguments",new []{typeof(string[]),typeof(string),typeof(string)});
+                Check(resolveArguments!=null,"支持显式数据参数优先解析");
+                Check((string)resolveArguments.Invoke(null,new object[]{new []{"--data-file",shared},locationFolder,fallback})==shared,"显式数据文件不读取无效默认配置");
+            } finally {Directory.Delete(locationFolder,true);}
             DateTime friday = new DateTime(2026, 9, 18, 9, 0, 0);
             var one = TaskAt(friday, "once");
             Check(!one.IsDue(friday.AddSeconds(-1)) && one.IsDue(friday), "提醒在到点时触发");

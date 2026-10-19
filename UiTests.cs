@@ -189,6 +189,30 @@ class UiTests
             ui.Control<DataGrid>("TaskGrid").SelectedItem = ui.Control<DataGrid>("TaskGrid").Items.Cast<TaskRow>().First(r => r.Title == "向负责人确认结论");
             var history = ui.Control<TextBlock>("WorkflowHistory").Text;
             Check(history.IndexOf("下一步界面验证", StringComparison.Ordinal) < history.IndexOf("向负责人确认结论", StringComparison.Ordinal) && history.Contains("完成："), "工作链历史按步骤顺序显示状态与时间");
+            var edited=store.Load().Tasks.First(t=>t.Title=="向负责人确认结论");
+            ui.Control<TextBox>("NotesInput").Text="窗口尚未保存的备注";
+            ui.BridgeCommand("update_task",BridgeJson.Map("requestId",Guid.NewGuid().ToString("N"),"expectedRevision",store.Load().Revision,"taskId",edited.Id,"notes","Codex已保存备注"),"*");
+            Check(ui.Control<TextBox>("NotesInput").Text=="窗口尚未保存的备注","外部更新保留未保存表单");
+            Click(ui.Control<Button>("SaveButton"));
+            Check(store.Load().Tasks.First(t=>t.Id==edited.Id).Notes=="Codex已保存备注" && ui.Control<TextBlock>("ErrorLabel").Text.Contains("变化"),"过期窗口编辑不能覆盖聊天修改");
+            Check(ui.Control<Button>("CodexButton")!=null,"主窗口提供Codex助手入口");
+            SelectProject(ui,project.Id);
+            bool preserved=false;
+            var projectTimer=new DispatcherTimer{Interval=TimeSpan.FromMilliseconds(100)};
+            projectTimer.Tick+=delegate
+            {
+                var dialog=Application.Current.Windows.Cast<Window>().FirstOrDefault(w=>w.Title=="编辑项目");if(dialog==null)return;
+                projectTimer.Stop();
+                var panel=(StackPanel)((ScrollViewer)dialog.Content).Content;
+                var name=panel.Children.OfType<TextBox>().First();name.Text="尚未保存的项目名称";
+                ui.BridgeCommand("update_project",BridgeJson.Map("requestId",Guid.NewGuid().ToString("N"),"expectedRevision",store.Load().Revision,"projectId",project.Id,"goal","外部已更新的目标"),"*");
+                var buttons=panel.Children.OfType<StackPanel>().Last();
+                Click(buttons.Children.OfType<Button>().First(b=>(string)b.Content=="保存"));
+                preserved=dialog.IsVisible && name.Text=="尚未保存的项目名称" && panel.Children.OfType<TextBlock>().Any(t=>t.Text.Contains("变化"));
+                if(dialog.IsVisible)dialog.Close();
+            };
+            projectTimer.Start();Click(ui.Control<Button>("EditProjectButton"));projectTimer.Stop();
+            Check(preserved && store.Load().Projects.First(p=>p.Id==project.Id).Goal=="外部已更新的目标","项目弹窗冲突保留输入且不误报保存成功");
             Console.WriteLine("TOTAL UI: " + count + " passed");
             return 0;
         }

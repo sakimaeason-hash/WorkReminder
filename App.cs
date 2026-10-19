@@ -25,20 +25,23 @@ namespace WorkReminder
             SetProcessDPIAware();
             Thread.CurrentThread.CurrentCulture = CultureInfo.GetCultureInfo("zh-CN");
             Thread.CurrentThread.CurrentUICulture = CultureInfo.GetCultureInfo("zh-CN");
-            string folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WorkReminder");
+            string dataFile;
+            try {dataFile=DataLocation.ResolveArguments(args);}
+            catch(Exception ex){MessageBox.Show(ex.Message,"工作提醒器未能启动",MessageBoxButton.OK,MessageBoxImage.Error);return 1;}
             bool created;
-            using (var mutex = new Mutex(true, "Local\\WorkReminder-" + Environment.UserName, out created))
+            using (var mutex = new Mutex(true, "Local\\WorkReminder-" + Environment.UserName+"-"+BridgePipeClient.Name(dataFile), out created))
             {
                 if (!created)
                 {
-                    try { using (var signal = EventWaitHandle.OpenExisting("Local\\WorkReminder-Show-" + Environment.UserName)) signal.Set(); }
+                    if(args.Contains("--background"))return 0;
+                    try { using (var signal = EventWaitHandle.OpenExisting("Local\\WorkReminder-Show-" + Environment.UserName+"-"+BridgePipeClient.Name(dataFile))) signal.Set(); }
                     catch (WaitHandleCannotBeOpenedException) { MessageBox.Show("工作提醒器正在启动，请稍后重试。", "工作提醒器"); }
                     return 0;
                 }
                 try
                 {
                     var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
-                    var controller = new ReminderApp(Path.Combine(folder, "tasks.json"), true);
+                    var controller = new ReminderApp(dataFile, true);
                     app.DispatcherUnhandledException += delegate(object sender, DispatcherUnhandledExceptionEventArgs e)
                     {
                         e.Handled = true;
@@ -50,7 +53,7 @@ namespace WorkReminder
                 }
                 catch (Exception ex)
                 {
-                    MessageBox.Show(ex.Message + "\n\n数据位置：" + folder, "工作提醒器未能启动", MessageBoxButton.OK, MessageBoxImage.Error);
+                    MessageBox.Show(ex.Message + "\n\n数据位置：" + dataFile, "工作提醒器未能启动", MessageBoxButton.OK, MessageBoxImage.Error);
                     return 1;
                 }
                 finally { mutex.ReleaseMutex(); }
@@ -106,6 +109,9 @@ namespace WorkReminder
         readonly DispatcherTimer timer;
         Forms.NotifyIcon tray;
         EventWaitHandle showSignal;
+        BridgePipeServer bridge;
+        AssistantWindow assistant;
+        long editorRevision;
         string view = "today";
         string selectedProjectId;
         string editingId;
@@ -140,9 +146,21 @@ namespace WorkReminder
         }
         public void Start(bool background)
         {
+            bridge=new BridgePipeServer(store.FilePath,delegate(string line)
+            {
+                return (string)MainWindow.Dispatcher.Invoke(new Func<string>(delegate
+                {
+                    var request=BridgeJson.Parse(line);string operation=BridgeJson.Required(request,"operation");
+                    if(operation=="ping")return BridgeJson.Dump(BridgeJson.Map("ok",true));
+                    if(operation=="shutdown") {MainWindow.Dispatcher.BeginInvoke(new Action(Shutdown));return BridgeJson.Dump(BridgeJson.Map("ok",true));}
+                    var args=request.ContainsKey("arguments")?request["arguments"] as Dictionary<string,object>:new Dictionary<string,object>();
+                    if(args==null)throw new InvalidDataException("arguments 必须为对象。");
+                    return BridgeJson.Dump(BridgeJson.Map("ok",true,"result",BridgeCommand(operation,args,BridgeJson.Text(request,"scope","*"))));
+                }));
+            });bridge.Start();
             if (systemIntegration)
             {
-                showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\WorkReminder-Show-" + Environment.UserName);
+                showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, "Local\\WorkReminder-Show-" + Environment.UserName+"-"+BridgePipeClient.Name(store.FilePath));
                 tray = new Forms.NotifyIcon { Icon = System.Drawing.Icon.ExtractAssociatedIcon(Assembly.GetExecutingAssembly().Location), Text = "工作提醒器", Visible = true };
                 var menu = new Forms.ContextMenuStrip();
                 menu.Items.Add("打开工作提醒器", null, delegate { ShowMain(); });
@@ -164,7 +182,10 @@ namespace WorkReminder
         }
         public void Shutdown()
         {
+            if(shuttingDown)return;
             shuttingDown = true; timer.Stop();
+            if(bridge!=null)bridge.Dispose();
+            if(assistant!=null)assistant.Close();
             if (ActiveReminder != null) ActiveReminder.Close();
             if (tray != null) { tray.Visible = false; var icon = tray.Icon; tray.Dispose(); icon.Dispose(); }
             if (showSignal != null) showSignal.Dispose();
@@ -173,6 +194,14 @@ namespace WorkReminder
         }
         void WireEvents()
         {
+            Control<Button>("CodexButton").Click+=delegate
+            {
+                if(assistant!=null){assistant.Activate();return;}
+                string scope=selectedProjectId??WorkflowConstants.UnassignedProjectId;
+                string name=scope=="*"?"全部项目":state.Project(scope).Name;
+                assistant=new AssistantWindow(scope,name,store.FilePath){Owner=MainWindow};
+                assistant.Closed+=delegate {assistant=null;};assistant.Show();
+            };
             Control<Button>("ExitButton").Click += delegate { Shutdown(); };
             Control<Button>("TodayButton").Click += delegate { view = "today"; Refresh(); };
             Control<Button>("AllButton").Click += delegate { view = "all"; Refresh(); };
@@ -183,6 +212,7 @@ namespace WorkReminder
                 if (refreshing) return;
                 var choice = Control<ComboBox>("ProjectList").SelectedItem as ProjectChoice;
                 selectedProjectId = choice == null ? WorkflowConstants.UnassignedProjectId : choice.Id;
+                if(assistant!=null)assistant.Close();
                 view = "all"; ResetEditor(); Refresh();
             };
             Control<Button>("NewProjectButton").Click += delegate { NewProject(); };
@@ -227,7 +257,7 @@ namespace WorkReminder
                     using (RegistryKey key = Registry.CurrentUser.CreateSubKey(RunKey))
                     {
                         if (Control<CheckBox>("StartupCheck").IsChecked == true)
-                            key.SetValue(RunName, "\"" + Assembly.GetExecutingAssembly().Location + "\" --background");
+                            key.SetValue(RunName, CodexClient.QuoteArgument(Assembly.GetExecutingAssembly().Location) + " --background --data-file " + CodexClient.QuoteArgument(store.FilePath));
                         else key.DeleteValue(RunName, false);
                     }
                     SetStatus(Control<CheckBox>("StartupCheck").IsChecked == true ? "已开启开机启动" : "已关闭开机启动");
@@ -259,6 +289,7 @@ namespace WorkReminder
         }
         ReminderProject ShowProjectDialog(ReminderProject source)
         {
+            long projectRevision=state.Revision;
             var result = source == null ? new ReminderProject() : new ReminderProject
             {
                 Id = source.Id, Name = source.Name, Owner = source.Owner, Goal = source.Goal,
@@ -281,6 +312,7 @@ namespace WorkReminder
             save.Click += delegate
             {
                 result.Name = fields["项目名称"].Text.Trim(); result.Owner = fields["负责人"].Text.Trim(); result.Goal = fields["工作目标"].Text.Trim(); result.SuccessCriteria = fields["衡量标准"].Text.Trim(); result.TargetDate = fields["计划完成日期（yyyy-MM-dd，可选）"].Text.Trim(); result.RisksAndSupport = fields["风险与所需支持"].Text.Trim();
+                if(source!=null && state.Revision!=projectRevision){error.Text="数据已变化，输入已保留。请复制需要保留的内容，取消后重新打开项目再保存。";return;}
                 try { result.Validate(); dialog.DialogResult = true; dialog.Close(); } catch (Exception ex) { error.Text = ex.Message; }
             };
             dialog.ShowDialog(); return dialog.DialogResult == true ? result : null;
@@ -296,6 +328,7 @@ namespace WorkReminder
             if (selectedProjectId == "*" || String.IsNullOrWhiteSpace(selectedProjectId)) { Error("请先选择具体项目。"); return; }
             var project = state.Project(selectedProjectId); if (project == null || project.IsSystem) { Error("“未归类”是系统项目，不能修改名称。"); return; }
             var edited = ShowProjectDialog(project); if (edited == null) return;
+            project=state.Project(edited.Id);
             if (state.Projects.Any(p => p.Id != edited.Id && String.Equals(p.Name, edited.Name, StringComparison.OrdinalIgnoreCase))) { Error("项目名称已存在。"); return; }
             if (Change(delegate { project.Name = edited.Name; project.Owner = edited.Owner; project.Goal = edited.Goal; project.SuccessCriteria = edited.SuccessCriteria; project.TargetDate = edited.TargetDate; project.RisksAndSupport = edited.RisksAndSupport; })) { RefreshProjects(); Refresh(); SetStatus("项目资料已保存"); }
         }
@@ -375,6 +408,18 @@ namespace WorkReminder
         }
         void Error(string text) { Control<TextBlock>("ErrorLabel").Text = text; }
         void SetStatus(string text) { Control<TextBlock>("StatusLabel").Text = text; }
+        public Dictionary<string,object> BridgeCommand(string operation,Dictionary<string,object> arguments,string scope)
+        {
+            MainWindow.Dispatcher.VerifyAccess();
+            if(shuttingDown)throw new InvalidOperationException("提醒器正在退出。");
+            var service=new BridgeService(delegate{return state;},delegate(AppState next)
+            {
+                store.Save(next);state=next;
+                if(ActiveReminder!=null && !state.Tasks.Any(t=>t.Id==popupTaskId&&!t.IsCompleted))ClosePopupFor(popupTaskId);
+                RefreshProjects();Refresh();SetStatus("Codex 操作已保存；未保存的编辑请核对后再提交。");
+            },store.FilePath);
+            return service.Execute(operation,arguments,scope);
+        }
         bool Change(Action action)
         {
             // 先保留内存快照；磁盘写入失败时恢复，避免界面误报保存成功。
@@ -444,6 +489,7 @@ namespace WorkReminder
         }
         void ResetEditor()
         {
+            editorRevision=state.Revision;
             editingId = null; nextAfterId = null; refreshing = true; Control<DataGrid>("TaskGrid").SelectedItem = null; refreshing = false;
             DateTime next = DateTime.Now.AddHours(1);
             Control<TextBox>("TitleInput").Text = "";
@@ -467,6 +513,7 @@ namespace WorkReminder
         }
         void Edit(ReminderTask task)
         {
+            editorRevision=state.Revision;
             editingId = task.Id; nextAfterId = null;
             Control<TextBox>("TitleInput").Text = task.Title;
             Control<DatePicker>("DateInput").SelectedDate = task.DueAt.Date;
@@ -496,6 +543,7 @@ namespace WorkReminder
         }
         void SaveEditor()
         {
+            if(editorRevision!=state.Revision){Error("数据已变化，当前输入已保留。请复制需要保留的内容，重新选择事项或点击新增后再保存。");return;}
             string title = Control<TextBox>("TitleInput").Text.Trim();
             DateTime time;
             if (title.Length == 0) { Error("请填写工作事项。"); return; }

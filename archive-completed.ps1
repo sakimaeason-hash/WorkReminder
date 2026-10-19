@@ -1,15 +1,35 @@
 param(
-    [string]$DataDirectory = (Join-Path $env:LOCALAPPDATA 'WorkReminder')
+    [string]$DataDirectory
 )
 
 $ErrorActionPreference = 'Stop'
+$useDefaultDirectory=[string]::IsNullOrWhiteSpace($DataDirectory)
+$defaultDataFile=Join-Path $env:LOCALAPPDATA 'WorkReminder\tasks.json'
+$locationFile=Join-Path $PSScriptRoot 'data-location.txt'
+if($useDefaultDirectory -and (Test-Path -LiteralPath $locationFile)){
+    $defaultDataFile=([IO.File]::ReadAllText($locationFile)).Trim()
+    if($defaultDataFile -notmatch '^(?:[A-Za-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+[\\/])' -or $defaultDataFile -match '[\r\n]' -or [string]::IsNullOrEmpty([IO.Path]::GetFileName($defaultDataFile))){throw 'data-location.txt 必须包含有效的绝对数据文件路径。'}
+    $defaultDataFile=[IO.Path]::GetFullPath($defaultDataFile)
+    if([IO.Directory]::Exists($defaultDataFile)){throw 'data-location.txt 必须指定数据文件，不能使用目录。'}
+}
+if($useDefaultDirectory){$DataDirectory=[IO.Path]::GetDirectoryName($defaultDataFile)}
 $DataDirectory = [System.IO.Path]::GetFullPath($DataDirectory)
-$liveDirectory = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'WorkReminder'))
+$liveDirectory = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($defaultDataFile))
 if ($DataDirectory.TrimEnd('\') -ieq $liveDirectory.TrimEnd('\') -and (Get-Process WorkReminder -ErrorAction SilentlyContinue)) {
     throw '工作提醒器仍在运行，请先通过程序中的退出按钮正常退出。'
 }
 
-$tasksPath = Join-Path $DataDirectory 'tasks.json'
+$tasksPath = if($useDefaultDirectory){$defaultDataFile}else{Join-Path $DataDirectory 'tasks.json'}
+if([IO.Directory]::Exists($tasksPath)){throw '任务文件路径不能是目录。'}
+# Match the application mutex for the resolved file without reading default configuration.
+$mutexInput=[IO.Path]::GetFullPath($tasksPath).ToUpperInvariant()+[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$sha=[Security.Cryptography.SHA256]::Create()
+try{$hash=[BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -InputObject $mutexInput -Compress)))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
+$runningMutex=$null
+if([Threading.Mutex]::TryOpenExisting(('Local\WorkReminder-'+$env:USERNAME+'-WorkReminder-bridge-'+$hash.Substring(0,32)),[ref]$runningMutex)){
+    $runningMutex.Dispose()
+    throw '此任务文件的工作提醒器仍在运行，请正常退出后再归档。'
+}
 $archivePath = Join-Path $DataDirectory 'archive.json'
 if (-not (Test-Path -LiteralPath $tasksPath)) { throw "任务文件不存在：$tasksPath" }
 $state = Get-Content -LiteralPath $tasksPath -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable
@@ -101,6 +121,7 @@ $remaining = @($state.Tasks | Where-Object { -not $closedIds.Contains([string]$_
 $archive.Tasks = @($archive.Tasks) + $newEntries
 $archive.Version = 2
 $state.Tasks = $remaining
+$state.Revision = [long]$state.Revision + 1
 $stamp = [DateTime]::Now.ToString('yyyyMMdd-HHmmss-fff') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
 $snapshotPath = Join-Path $DataDirectory "tasks.pre-archive-$stamp.json"
 [System.IO.File]::Copy($tasksPath, $snapshotPath, $false)

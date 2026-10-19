@@ -1,7 +1,6 @@
 $ErrorActionPreference = 'Stop'
-if (Get-Process WorkReminder -ErrorAction SilentlyContinue) {
-    throw '请先退出正在运行的工作提醒器，再运行系统集成测试。'
-}
+# SystemTests uses its own temporary data file and matching per-file show signal.
+# It only verifies its own instance and does not control a running desktop reminder.
 $framework = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319'
 $options = @('/nologo', '/target:exe', '/out:WorkReminder.SystemTests.exe', '/reference:WorkReminder.exe')
 foreach ($reference in @('WPF\WindowsBase.dll', 'WPF\PresentationCore.dll', 'WPF\PresentationFramework.dll', 'System.Xaml.dll')) {
